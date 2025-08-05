@@ -1,0 +1,59 @@
+{
+  "name": "qase-codeceptjs-helper",
+  "version": "1.0.15",
+  "description": "TypeScript CodeceptJS helper for Qase.io integration and HTML reporting with --steps flag support",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "index.js.map",
+    "src/",
+    "templates/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "echo \"Files are pre-built, skipping build step\"",
+    "test": "echo \"Tests are run in the parent project\" && exit 0"
+  },
+  "keywords": [
+    "codeceptjs",
+    "qase",
+    "qase.io",
+    "testing",
+    "automation",
+    "reporting",
+    "html-reports",
+    "test-management",
+    "playwright",
+    "puppeteer",
+    "webdriver",
+    "steps-extraction",
+    "typescript"
+  ],
+  "author": "Leytan Fortuin",
+  "license": "MIT",
+  "homepage": "https://github.com/your-username/qase-codeceptjs-helper",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-username/qase-codeceptjs-helper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/qase-codeceptjs-helper/issues"
+  },
+  "peerDependencies": {
+    "codeceptjs": "^3.0.0"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^18.0.0"
+  }
+}

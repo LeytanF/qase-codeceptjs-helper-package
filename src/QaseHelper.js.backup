@@ -1,0 +1,649 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+const codeceptjs_1 = require("codeceptjs");
+const QaseConfig_1 = require("./config/QaseConfig");
+const QaseApiService_1 = require("./services/QaseApiService");
+const ReportGenerator_1 = require("./services/ReportGenerator");
+const Logger_1 = require("./utils/Logger");
+const path = __importStar(require("path"));
+/**
+ * CodeceptJS Helper for Qase.io integration and HTML reporting
+ */
+class QaseHelper extends codeceptjs_1.Helper {
+    constructor(config = {}) {
+        super(config);
+        this.testResults = [];
+        this.testStartTime = 0;
+        this.executionStartTime = 0;
+        this.logger = Logger_1.Logger.getInstance();
+        this.configManager = new QaseConfig_1.QaseConfigManager(config);
+        this.config = this.configManager.getConfig();
+        this.apiService = new QaseApiService_1.QaseApiService(this.config);
+        this.reportGenerator = new ReportGenerator_1.ReportGenerator();
+        this.logger.info('Qase Helper initialized', {
+            reportingEnabled: this.configManager.isReportingEnabled(),
+            qaseIntegrationEnabled: this.configManager.isQaseIntegrationEnabled(),
+            projectCode: this.config.projectCode,
+            runId: this.config.runId,
+            environment: this.config.environment,
+            environmentSlug: this.config.environmentSlug
+        });
+    }
+    /**
+     * CodeceptJS event: before all tests
+     */
+    async _beforeSuite() {
+        this.executionStartTime = Date.now();
+        this.logger.debug('Test execution started');
+        // Note: Test run creation moved to after tests to include actual case IDs
+    }
+    /**
+     * CodeceptJS event: before each test
+     */
+    _before() {
+        this.testStartTime = Date.now();
+        // Ensure test start time is not earlier than suite start time
+        if (this.testStartTime < this.executionStartTime) {
+            this.testStartTime = this.executionStartTime;
+        }
+    }
+    /**
+     * CodeceptJS event: after each test
+     */
+    _after() {
+        const test = this.helpers['Playwright'] || this.helpers['Puppeteer'] || this.helpers['WebDriver'];
+        if (test) {
+            this.recordTestResult(test);
+        }
+    }
+    /**
+     * CodeceptJS event: after all tests
+     */
+    async _afterSuite() {
+        this.logger.debug('Test execution completed, processing results');
+        try {
+            // First, handle Qase integration if enabled (this sets this.currentRunId)
+            if (this.configManager.isQaseIntegrationEnabled()) {
+                // Create test run with actual case IDs from executed tests
+                await this.createNewTestRun();
+                await this.sendResultsToQase();
+                await this.completeTestRun();
+            }
+            // Then generate HTML report after Qase run ID is available
+            if (this.configManager.isReportingEnabled()) {
+                await this.generateHtmlReport();
+            }
+        }
+        catch (error) {
+            this.logger.error('Error in post-execution processing', error);
+        }
+    }
+    /**
+     * CodeceptJS event: test passed
+     */
+    _passed(test) {
+        this.recordTestResult(test, 'passed');
+    }
+    /**
+     * CodeceptJS event: test failed
+     */
+    _failed(test) {
+        // CodeceptJS passes the error through the test object
+        const error = test.err || test.error;
+        this.recordTestResult(test, 'failed', error);
+    }
+    /**
+     * CodeceptJS event: test skipped
+     */
+    _skipped(test) {
+        this.recordTestResult(test, 'skipped');
+    }
+    /**
+     * Record test result
+     */
+    recordTestResult(test, status, error) {
+        const endTime = Date.now();
+        // Ensure test start time is not earlier than execution start time
+        let testStartTime = this.testStartTime;
+        if (testStartTime < this.executionStartTime) {
+            testStartTime = this.executionStartTime;
+        }
+        const duration = endTime - testStartTime;
+        // Skip recording if no valid test data
+        const testTitle = test.title || test.ctx?.test?.title;
+        if (!testTitle || testTitle === 'Unknown Test') {
+            return; // Don't record unknown or invalid tests
+        }
+        const testResult = {
+            title: testTitle,
+            fullTitle: test.fullTitle || test.ctx?.test?.fullTitle || testTitle,
+            file: test.file || test.ctx?.test?.file || 'unknown',
+            duration: duration,
+            state: status || this.getTestStatus(test),
+            error: error || undefined,
+            startTime: testStartTime,
+            endTime: endTime,
+            tags: this.extractTags(test) || undefined,
+            steps: this.extractSteps(test) || undefined
+        };
+        // Handle test retries - only keep the final result for each unique test
+        const existingTestIndex = this.testResults.findIndex(result => result.fullTitle === testResult.fullTitle && result.file === testResult.file);
+        if (existingTestIndex >= 0) {
+            // Update existing test result with final retry status
+            this.testResults[existingTestIndex] = testResult;
+            this.logger.info(`📝 Updated test result for retry: ${testResult.title} -> ${testResult.state}`);
+        }
+        else {
+            // Add new test result
+            this.testResults.push(testResult);
+            this.logger.debug(`Test result recorded: ${testResult.title} - ${testResult.state}`);
+        }
+    }
+    /**
+     * Get test status from test object
+     */
+    getTestStatus(test) {
+        if (test.state === 'passed')
+            return 'passed';
+        if (test.state === 'failed')
+            return 'failed';
+        if (test.state === 'skipped' || test.pending)
+            return 'skipped';
+        return 'failed'; // Default to failed if uncertain
+    }
+    /**
+     * Extract tags from test
+     */
+    extractTags(test) {
+        const tags = [];
+        // Extract from test title (e.g., @smoke, @regression)
+        const titleToCheck = test.title || test.ctx?.test?.title || '';
+        const tagRegex = /@(\w+)/g;
+        let match;
+        while ((match = tagRegex.exec(titleToCheck)) !== null) {
+            tags.push(`@${match[1]}`); // Keep the @ symbol
+        }
+        // Try multiple possible locations for tags in CodeceptJS test object
+        const possibleTagSources = [
+            test.tags, // Direct tags property
+            test.ctx?.test?.tags, // Tags in context
+            test.scenario?.tags, // CodeceptJS scenario tags
+            test.opts?.tags, // Options tags
+            test.feature?.tags, // Feature tags
+            test.metadata?.tags, // Metadata tags
+            test.annotations, // Annotations as tags
+            test.test?.tags, // Nested test tags
+            test.parent?.tags, // Parent tags
+            test.steps, // Sometimes tags are in steps
+            test.meta, // Metadata
+            test.config?.tags, // Config tags
+        ];
+        // Also check for properties that might contain tags
+        try {
+            const allProps = Object.getOwnPropertyNames(test);
+            // Look for properties that might contain tags
+            for (const prop of allProps) {
+                if (prop.toLowerCase().includes('tag') && test[prop]) {
+                    possibleTagSources.push(test[prop]);
+                }
+            }
+        }
+        catch (error) {
+            // Ignore enumeration errors
+        }
+        for (const tagSource of possibleTagSources) {
+            if (tagSource && Array.isArray(tagSource)) {
+                tags.push(...tagSource);
+                break; // Use the first valid tag source found
+            }
+        }
+        return tags.length > 0 ? tags : undefined;
+    }
+    /**
+     * Extract steps from test
+     */
+    extractSteps(_test) {
+        // This would need to be implemented based on how steps are tracked
+        // in your specific CodeceptJS setup
+        return undefined;
+    }
+    /**
+     * Generate HTML report
+     */
+    async generateHtmlReport() {
+        try {
+            const reportData = this.buildReportData();
+            const reportPath = this.getReportPath();
+            const success = await this.reportGenerator.generateReport(reportData, reportPath);
+            if (success) {
+                this.logger.info(`HTML report generated: ${reportPath}`);
+            }
+            else {
+                this.logger.error('Failed to generate HTML report');
+            }
+        }
+        catch (error) {
+            this.logger.error('Error generating HTML report', error);
+        }
+    }
+    /**
+     * Create a new test run in Qase
+     */
+    async createNewTestRun() {
+        if (!this.configManager.isQaseIntegrationEnabled()) {
+            return;
+        }
+        const config = this.configManager.getConfig();
+        // Check if we have required credentials
+        if (!config.apiToken || !config.projectCode) {
+            this.logger.warn('Qase integration enabled but missing API credentials. Skipping test run creation.');
+            return;
+        }
+        // Get case IDs from tests that will be sent
+        const testResults = this.convertToQaseResults();
+        const caseIds = testResults
+            .map(result => result.case_id)
+            .filter((id) => id !== undefined);
+        this.logger.info(`📋 Creating test run for ${caseIds.length} specific test cases: [${caseIds.join(', ')}]`);
+        const runRequest = {
+            title: config.runTitle || `Automated Test Run - ${new Date().toISOString()}`,
+            description: config.runDescription || 'Automated test run created by CodeceptJS Qase Helper',
+            include_all_cases: false, // Only include specific cases
+            cases: caseIds.length > 0 ? caseIds : undefined, // Include only our test cases
+            is_autotest: true,
+            environment_slug: config.environmentSlug
+        };
+        // Add viewport size and browser to run description if available
+        const windowSizeString = this.configManager.getWindowSizeString();
+        const browser = this.configManager.getBrowser();
+        if (windowSizeString || browser) {
+            let additionalInfo = '';
+            if (windowSizeString) {
+                const mappedViewport = this.configManager.mapToQaseViewportSize(windowSizeString);
+                additionalInfo += `\nViewport: ${mappedViewport} (${windowSizeString})`;
+            }
+            if (browser) {
+                additionalInfo += `\nBrowser: ${browser}`;
+            }
+            runRequest.description += additionalInfo;
+        }
+        try {
+            const testRun = await this.apiService.createTestRun(runRequest);
+            if (testRun) {
+                this.currentRunId = testRun.id;
+                // Update the config with the new run ID
+                this.config.runId = testRun.id;
+                this.logger.info(`✅ Test run created successfully with ID: ${testRun.id} for ${caseIds.length} specific cases`);
+            }
+            else {
+                this.logger.error('❌ Failed to create test run. Test results will not be sent to Qase.');
+            }
+        }
+        catch (error) {
+            this.logger.error('❌ Error creating test run', error);
+        }
+    }
+    /**
+     * Send results to Qase
+     */
+    async sendResultsToQase() {
+        if (!this.configManager.isQaseIntegrationEnabled()) {
+            this.logger.debug('Qase integration is disabled, skipping result submission');
+            return;
+        }
+        const config = this.configManager.getConfig();
+        // Check if we have the minimum required configuration
+        if (!config.apiToken || !config.projectCode) {
+            this.logger.warn('Qase integration enabled but missing required configuration (apiToken or projectCode). Skipping result submission.');
+            return;
+        }
+        // Check if we have a run ID (either from config or newly created)
+        const runId = this.currentRunId || config.runId;
+        if (!runId) {
+            this.logger.warn('No run ID available. Cannot submit test results to Qase.');
+            return;
+        }
+        try {
+            const qaseResults = this.convertToQaseResults();
+            if (qaseResults.length === 0) {
+                this.logger.warn('No test results to send to Qase');
+                return;
+            }
+            this.logger.info(`📤 Sending ${qaseResults.length} test results to Qase (Run ID: ${runId})`);
+            // Log individual results being sent
+            qaseResults.forEach((result, index) => {
+                const caseId = result.case_id || 'Unknown';
+                const status = result.status || 'Unknown';
+                this.logger.info(`  ${index + 1}. Case ${caseId}: ${status} (${result.time_ms}ms)`);
+            });
+            const success = await this.apiService.submitBulkTestResults(qaseResults);
+            if (success) {
+                this.logger.info(`✅ Successfully sent ${qaseResults.length} test results to Qase project ${config.projectCode}`);
+            }
+            else {
+                this.logger.error(`❌ Failed to send test results to Qase project ${config.projectCode}`);
+            }
+        }
+        catch (error) {
+            this.logger.error('Error sending results to Qase', error);
+        }
+    }
+    /**
+     * Convert test results to Qase format
+     */
+    convertToQaseResults() {
+        const validResults = [];
+        // Use current time as baseline to ensure all test times are after test run creation
+        const currentTime = Date.now();
+        const baselineTime = Math.max(this.executionStartTime, currentTime - (this.testResults.length * 1000));
+        for (const test of this.testResults) {
+            // Ensure test start time is not earlier than baseline and not in future
+            let testStartTime = test.startTime;
+            if (testStartTime < baselineTime) {
+                testStartTime = baselineTime;
+            }
+            if (testStartTime > currentTime) {
+                testStartTime = currentTime - 1000; // 1 second ago
+            }
+            const qaseResult = {
+                status: this.mapStatusToQase(test.state),
+                time_ms: test.duration,
+                start_time: Math.floor(testStartTime / 1000),
+                comment: test.error ? test.error.message : undefined,
+                stacktrace: test.error ? test.error.stack : undefined
+            };
+            // Try to extract case ID from test title or tags
+            const caseId = this.extractCaseId(test);
+            if (caseId) {
+                qaseResult.case_id = caseId;
+                validResults.push(qaseResult);
+                this.logger.info(`📤 Sending test "${test.title}" to Qase case ID: ${caseId} with status: ${qaseResult.status}`);
+            }
+            else if (this.config.autoCreateTestCases) {
+                // Create test case object for auto-creation
+                qaseResult.case = {
+                    title: test.title,
+                    description: test.fullTitle,
+                    automation: 1, // Automated test case
+                };
+                validResults.push(qaseResult);
+                this.logger.info(`📤 Sending test "${test.title}" for auto-creation with status: ${qaseResult.status}`);
+            }
+            else {
+                this.logger.warn(`⚠️ Test "${test.title}" skipped - no case ID found and auto-creation disabled`);
+            }
+        }
+        if (validResults.length === 0) {
+            this.logger.warn('No tests have valid case IDs or auto-creation enabled. Enable auto-creation or add case IDs to test titles/tags.');
+        }
+        return validResults;
+    }
+    /**
+     * Map test status to Qase status
+     */
+    mapStatusToQase(status) {
+        switch (status) {
+            case 'passed':
+                return 'passed';
+            case 'failed':
+                return 'failed';
+            case 'skipped':
+                return 'skipped';
+            default:
+                return 'invalid';
+        }
+    }
+    /**
+     * Extract Qase case ID from test
+     */
+    extractCaseId(test) {
+        const prefix = this.config.testCasePrefix || 'C';
+        this.logger.debug(`🔍 Extracting case ID from test: "${test.title}"`);
+        this.logger.debug(`   Full title: "${test.fullTitle}"`);
+        this.logger.debug(`   Tags: ${test.tags ? JSON.stringify(test.tags) : 'none'}`);
+        this.logger.debug(`   Configured prefix: "${prefix}"`);
+        // Enhanced patterns to support various formats including @KSYS-22
+        const patterns = [
+            // Bracket formats
+            new RegExp(`\\[${prefix}[\\-:]?(\\d+)\\]`, 'i'), // [PREFIX123], [PREFIX-123], [PREFIX:123]
+            new RegExp(`\\[${prefix}\\s+(\\d+)\\]`, 'i'), // [PREFIX 123]
+            // Tag formats (for @KSYS-22 style)
+            new RegExp(`@${prefix}[\\-:]?(\\d+)`, 'i'), // @PREFIX-123, @PREFIX:123, @PREFIX123
+            new RegExp(`${prefix}[\\-:]?(\\d+)`, 'i'), // PREFIX-123, PREFIX:123, PREFIX123
+            // Colon and dash formats
+            new RegExp(`${prefix}:\\s*(\\d+)`, 'i'), // PREFIX: 123
+            new RegExp(`${prefix}-(\\d+)`, 'i'), // PREFIX-123
+            // CodeceptJS tag format
+            new RegExp(`\\.tag\\(['"]${prefix}[\\-:]?(\\d+)['"]\\)`, 'i'), // .tag('PREFIX-123')
+        ];
+        // Try to extract from test title
+        for (let i = 0; i < patterns.length; i++) {
+            const pattern = patterns[i];
+            const titleMatch = pattern.exec(test.title);
+            if (titleMatch) {
+                const caseId = parseInt(titleMatch[1]);
+                this.logger.info(`✅ Found case ID ${caseId} in test title using pattern ${i + 1}: "${test.title}"`);
+                return caseId;
+            }
+        }
+        // Try to extract from full title
+        for (let i = 0; i < patterns.length; i++) {
+            const pattern = patterns[i];
+            const fullTitleMatch = pattern.exec(test.fullTitle);
+            if (fullTitleMatch) {
+                const caseId = parseInt(fullTitleMatch[1]);
+                this.logger.info(`✅ Found case ID ${caseId} in full title using pattern ${i + 1}: "${test.fullTitle}"`);
+                return caseId;
+            }
+        }
+        // Try to extract from tags
+        if (test.tags && test.tags.length > 0) {
+            this.logger.debug(`   Checking ${test.tags.length} tags...`);
+            const tagPatterns = [
+                new RegExp(`^${prefix}[\\-:]?(\\d+)$`, 'i'), // PREFIX-123, PREFIX:123, PREFIX123
+                new RegExp(`^@?${prefix}[\\-:]?(\\d+)$`, 'i'), // @PREFIX-123, PREFIX-123 etc
+                new RegExp(`^(\\d+)$`, 'i'), // Just numbers
+            ];
+            for (const tag of test.tags) {
+                this.logger.debug(`     Checking tag: "${tag}"`);
+                for (let i = 0; i < tagPatterns.length; i++) {
+                    const pattern = tagPatterns[i];
+                    const tagMatch = pattern.exec(tag);
+                    if (tagMatch) {
+                        const caseId = parseInt(tagMatch[1]);
+                        this.logger.info(`✅ Found case ID ${caseId} in tag using pattern ${i + 1}: "${tag}"`);
+                        return caseId;
+                    }
+                }
+            }
+        }
+        // Legacy support for 'C' prefix even if custom prefix is configured
+        if (prefix !== 'C') {
+            this.logger.debug(`   Trying legacy 'C' prefix patterns...`);
+            const legacyPatterns = [
+                new RegExp(`\\[C[\\-:]?(\\d+)\\]`, 'i'), // [C123], [C-123]
+                new RegExp(`@C[\\-:]?(\\d+)`, 'i'), // @C-123
+                new RegExp(`C[\\-:]?(\\d+)`, 'i'), // C-123, C:123
+            ];
+            for (let i = 0; i < legacyPatterns.length; i++) {
+                const pattern = legacyPatterns[i];
+                const titleMatch = pattern.exec(test.title);
+                const fullTitleMatch = pattern.exec(test.fullTitle);
+                if (titleMatch) {
+                    const caseId = parseInt(titleMatch[1]);
+                    this.logger.info(`✅ Found case ID ${caseId} using legacy 'C' prefix in title: "${test.title}"`);
+                    return caseId;
+                }
+                if (fullTitleMatch) {
+                    const caseId = parseInt(fullTitleMatch[1]);
+                    this.logger.info(`✅ Found case ID ${caseId} using legacy 'C' prefix in full title: "${test.fullTitle}"`);
+                    return caseId;
+                }
+            }
+            if (test.tags) {
+                for (const tag of test.tags) {
+                    const legacyTagMatch = /^C(\d+)$/i.exec(tag);
+                    if (legacyTagMatch) {
+                        const caseId = parseInt(legacyTagMatch[1]);
+                        this.logger.info(`✅ Found case ID ${caseId} using legacy 'C' prefix in tag: "${tag}"`);
+                        return caseId;
+                    }
+                }
+            }
+        }
+        this.logger.warn(`❌ No case ID found in test: "${test.title}" (full: "${test.fullTitle}") with prefix: "${prefix}"`);
+        return undefined;
+    }
+    /**
+     * Build report data
+     */
+    buildReportData() {
+        const endTime = Date.now();
+        const duration = endTime - this.executionStartTime;
+        // Group tests by suite/file
+        const suiteMap = new Map();
+        this.testResults.forEach(test => {
+            const suiteName = test.file || 'Unknown Suite';
+            if (!suiteMap.has(suiteName)) {
+                suiteMap.set(suiteName, []);
+            }
+            suiteMap.get(suiteName).push(test);
+        });
+        // Build suite data
+        const suites = Array.from(suiteMap.entries()).map(([suiteName, tests]) => {
+            const suiteDuration = tests.reduce((sum, test) => sum + test.duration, 0);
+            const passed = tests.filter(test => test.state === 'passed').length;
+            const failed = tests.filter(test => test.state === 'failed').length;
+            const skipped = tests.filter(test => test.state === 'skipped').length;
+            return {
+                title: suiteName,
+                tests: tests,
+                duration: suiteDuration,
+                passed: passed,
+                failed: failed,
+                skipped: skipped
+            };
+        });
+        // Calculate totals
+        const totalTests = this.testResults.length;
+        const passed = this.testResults.filter(test => test.state === 'passed').length;
+        const failed = this.testResults.filter(test => test.state === 'failed').length;
+        const skipped = this.testResults.filter(test => test.state === 'skipped').length;
+        const { EnvironmentHelper } = require('./utils/EnvironmentHelper');
+        const currentEnv = EnvironmentHelper.getCurrentEnvironment();
+        return {
+            startTime: this.executionStartTime,
+            endTime: endTime,
+            duration: duration,
+            suites: suites,
+            totalTests: totalTests,
+            passed: passed,
+            failed: failed,
+            skipped: skipped,
+            environment: this.getEnvironmentInfo(),
+            testEnvironment: currentEnv ? currentEnv.name : undefined,
+            currentRunId: this.currentRunId
+        };
+    }
+    /**
+     * Get environment information
+     */
+    getEnvironmentInfo() {
+        const { EnvironmentHelper } = require('./utils/EnvironmentHelper');
+        const currentEnv = EnvironmentHelper.getCurrentEnvironment();
+        const envInfo = {
+            'Node.js Version': process.version,
+            'Platform': process.platform,
+            'Architecture': process.arch,
+            'Test Environment': currentEnv ? `${currentEnv.name} (${currentEnv.slug})` : process.env.ENV || 'Not specified',
+            'Qase Project': this.config.projectCode,
+            'Qase Run ID': this.currentRunId,
+            'Timestamp': new Date().toISOString()
+        };
+        // Add viewport size and browser from codecept config
+        const windowSizeString = this.configManager.getWindowSizeString();
+        const browser = this.configManager.getBrowser();
+        if (windowSizeString) {
+            envInfo['Viewport Size'] = windowSizeString;
+        }
+        if (browser) {
+            envInfo['Browser'] = browser;
+        }
+        return envInfo;
+    }
+    /**
+     * Get report file path
+     */
+    getReportPath() {
+        const reportDir = this.config.reportPath || './reports';
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const filename = `qase-report-${timestamp}.html`;
+        return path.join(reportDir, filename);
+    }
+    /**
+     * Complete the test run if all tests passed
+     */
+    async completeTestRun() {
+        if (!this.currentRunId) {
+            return;
+        }
+        // Check if all tests passed
+        const allTestsPassed = this.testResults.every(test => test.state === 'passed');
+        if (allTestsPassed && this.testResults.length > 0) {
+            this.logger.info(`All ${this.testResults.length} tests passed, completing test run ${this.currentRunId}`);
+            await this.apiService.completeTestRun(this.currentRunId);
+        }
+        else {
+            this.logger.info(`Not completing test run ${this.currentRunId} - ${this.testResults.filter(t => t.state === 'failed').length} failed, ${this.testResults.filter(t => t.state === 'skipped').length} skipped`);
+        }
+    }
+    /**
+     * Public method to update configuration
+     */
+    updateConfig(updates) {
+        this.configManager.updateConfig(updates);
+        this.config = this.configManager.getConfig();
+        this.apiService = new QaseApiService_1.QaseApiService(this.config);
+        this.logger.info('Configuration updated');
+    }
+    /**
+     * Public method to get current configuration
+     */
+    getConfig() {
+        return this.configManager.getConfig();
+    }
+}
+module.exports = QaseHelper;
+//# sourceMappingURL=QaseHelper.js.map

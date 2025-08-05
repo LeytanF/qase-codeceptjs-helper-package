@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Execution Report</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-size: 2.5em;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .summary-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        .summary-card h3 {
+            color: #7f8c8d;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+
+        .summary-card .value {
+            font-size: 2em;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .summary-card .percentage {
+            font-size: 0.9em;
+            color: #7f8c8d;
+        }
+
+        .passed { color: #27ae60; }
+        .failed { color: #e74c3c; }
+        .skipped { color: #f39c12; }
+
+        .test-suite {
+            background: white;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .suite-title {
+            background: #34495e;
+            color: white;
+            padding: 20px;
+            margin: 0;
+            font-size: 1.3em;
+        }
+
+        .suite-summary {
+            padding: 15px 20px;
+            background: #ecf0f1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #bdc3c7;
+        }
+
+        .suite-duration {
+            font-weight: bold;
+            color: #7f8c8d;
+        }
+
+        .suite-stats span {
+            margin-left: 15px;
+            font-weight: bold;
+        }
+
+        .tests {
+            padding: 0;
+        }
+
+        .test {
+            border-bottom: 1px solid #ecf0f1;
+            transition: background-color 0.2s;
+        }
+
+        .test:hover {
+            background-color: #f8f9fa;
+        }
+
+        .test:last-child {
+            border-bottom: none;
+        }
+
+        .test-header {
+            padding: 15px 20px;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .test-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: bold;
+            margin-right: 15px;
+            min-width: 60px;
+            text-align: center;
+        }
+
+        .test-status.passed {
+            background-color: #d5edda;
+            color: #155724;
+        }
+
+        .test-status.failed {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+
+        .test-status.skipped {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+
+        .test-title {
+            flex: 1;
+            font-weight: 500;
+        }
+
+        .test-duration {
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }
+
+        .test-details {
+            padding: 0 20px 15px;
+            background-color: #f8f9fa;
+            border-top: 1px solid #ecf0f1;
+        }
+
+        .test-file {
+            color: #7f8c8d;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+        }
+
+        .test-error {
+            background-color: #fff5f5;
+            border: 1px solid #fed7d7;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 10px;
+        }
+
+        .error-message {
+            color: #e53e3e;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .error-assertion {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border-left: 4px solid #e74c3c;
+        }
+
+        .assertion-expected {
+            color: #27ae60;
+            margin-bottom: 5px;
+        }
+
+        .assertion-actual {
+            color: #e74c3c;
+            margin-bottom: 5px;
+        }
+
+        .error-stack {
+            color: #718096;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8em;
+            white-space: pre-wrap;
+            background-color: #f7fafc;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            margin-top: 10px;
+        }
+
+        .test-step {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border-left: 4px solid #dee2e6;
+        }
+
+        .test-step.failed {
+            border-left-color: #e74c3c;
+        }
+
+        .test-step.passed {
+            border-left-color: #27ae60;
+        }
+
+        .step-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .step-name {
+            font-weight: 500;
+        }
+
+        .step-duration {
+            color: #7f8c8d;
+            font-size: 0.9em;
+        }
+
+        .environment {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-top: 30px;
+        }
+
+        .environment h3 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+
+        .env-items {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 10px;
+        }
+
+        .env-item {
+            display: flex;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+
+        .env-key {
+            font-weight: bold;
+            color: #34495e;
+            margin-right: 10px;
+            min-width: 150px;
+        }
+
+        .env-value {
+            color: #7f8c8d;
+            word-break: break-all;
+        }
+
+        .metadata {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .metadata-item {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .metadata-label {
+            font-weight: bold;
+            color: #34495e;
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .metadata-value {
+            color: #7f8c8d;
+        }
+
+
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+
+            .header {
+                padding: 20px;
+            }
+
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .summary {
+                grid-template-columns: 1fr;
+            }
+
+            .test-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .test-status {
+                margin-bottom: 10px;
+            }
+
+            .suite-summary {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .suite-stats {
+                margin-top: 10px;
+            }
+
+            .suite-stats span {
+                margin-left: 0;
+                margin-right: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Test Execution Report</h1>
+            <div class="metadata">
+                <div class="metadata-item">
+                    <span class="metadata-label">Start Time</span>
+                    <span class="metadata-value">{{startDate}}</span>
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">End Time</span>
+                    <span class="metadata-value">{{endDate}}</span>
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">Duration</span>
+                    <span class="metadata-value">{{duration}}</span>
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">Total Tests</span>
+                    <span class="metadata-value">{{totalTests}}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="summary">
+            <div class="summary-card">
+                <h3>Passed</h3>
+                <div class="value passed">{{passed}}</div>
+                <div class="percentage">{{passRate}}%</div>
+            </div>
+            <div class="summary-card">
+                <h3>Failed</h3>
+                <div class="value failed">{{failed}}</div>
+                <div class="percentage">{{failRate}}%</div>
+            </div>
+            <div class="summary-card">
+                <h3>Skipped</h3>
+                <div class="value skipped">{{skipped}}</div>
+                <div class="percentage">{{skipRate}}%</div>
+            </div>
+        </div>
+
+        {{suites}}
+
+        {{environment}}
+    </div>
+
+    <script>
+        // Add interactivity to test details
+        document.addEventListener('DOMContentLoaded', function() {
+            const testHeaders = document.querySelectorAll('.test-header');
+            
+            testHeaders.forEach(header => {
+                header.addEventListener('click', function() {
+                    const testDetails = this.nextElementSibling;
+                    if (testDetails && testDetails.classList.contains('test-details')) {
+                        if (testDetails.style.display === 'none') {
+                            testDetails.style.display = 'block';
+                        } else {
+                            testDetails.style.display = 'none';
+                        }
+                    }
+                });
+            });
+
+            // Initially hide test details for failed tests only
+            const failedTests = document.querySelectorAll('.test.failed .test-details');
+            failedTests.forEach(details => {
+                details.style.display = 'block';
+            });
+
+            // Hide details for passed and skipped tests
+            const passedTests = document.querySelectorAll('.test.passed .test-details, .test.skipped .test-details');
+            passedTests.forEach(details => {
+                details.style.display = 'none';
+            });
+        });
+    </script>
+</body>
+</html>
